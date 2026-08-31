@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Stretch Test 2 - Direct Playback</title>
+<style>
+  body{ font-family: sans-serif; background:#111; color:#eee; padding:20px; }
+  button{ padding:14px 20px; font-size:16px; margin:8px 0; width:100%; }
+  #log{ white-space:pre-wrap; background:#000; color:#0f0; padding:12px; border-radius:8px; font-size:13px; margin-top:16px; min-height:150px; }
+</style>
+</head>
+<body>
+
+<h2>Direct Playback Test (no recording)</h2>
+<p>Turn your volume up. This plays a stretched beep tone straight out of your speaker — no recording, no extra layers. If the library works at all, you WILL hear it.</p>
+
+<button onclick="runTest()">Tap, then Listen for 3 seconds</button>
+
+<div id="log">Waiting...</div>
+
+<script>
+function log(msg){
+  document.getElementById('log').textContent += "\n" + msg;
+}
+
+async function runTest(){
+  document.getElementById('log').textContent = "Starting...";
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    log("AudioContext state before resume: " + audioCtx.state);
+    await audioCtx.resume();
+    log("AudioContext state after resume: " + audioCtx.state);
+
+    const { default: SignalsmithStretch } = await import('https://esm.sh/signalsmith-stretch@1');
+    log("✓ Library imported");
+
+    // Test tone: 1 second, 440Hz beep
+    const sampleRate = audioCtx.sampleRate;
+    const testData = new Float32Array(sampleRate * 1);
+    for(let i = 0; i < testData.length; i++){
+      testData[i] = Math.sin(2 * Math.PI * 440 * i / sampleRate) * 0.6;
+    }
+    log("✓ Test tone built (" + testData.length + " samples)");
+
+    const stretch = await SignalsmithStretch(audioCtx, { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    log("✓ Node created");
+
+    await stretch.addBuffers([testData]);
+    log("✓ addBuffers() done");
+
+    // Connect STRAIGHT to speakers — no recording, no blob, nothing else.
+    stretch.connect(audioCtx.destination);
+    log("✓ Connected directly to speakers");
+
+    stretch.start();
+    log("✓ start() called");
+
+    stretch.schedule({ input: 0, output: audioCtx.currentTime + 0.15, rate: 0.5 });
+    log("✓ schedule() called — YOU SHOULD HEAR A BEEP NOW for ~2 seconds");
+
+    log("\nAudioContext.state right now: " + audioCtx.state);
+    log("AudioContext.currentTime: " + audioCtx.currentTime.toFixed(3));
+
+    // Log again after the sound should have finished playing, to check
+    // whether the context kept advancing (a frozen/suspended context
+    // wouldn't move currentTime forward at all).
+    setTimeout(() => {
+      log("\n2.5s later — AudioContext.currentTime: " + audioCtx.currentTime.toFixed(3) + " (should have advanced by ~2.5 if it's really running)");
+      log("AudioContext.state: " + audioCtx.state);
+    }, 2500);
+
+  } catch (e) {
+    log("✗ ERROR: " + e.message);
+    log(e.stack || "(no stack trace)");
+  }
+}
+</script>
+
+</body>
+</html>
