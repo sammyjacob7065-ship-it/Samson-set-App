@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Stretch Test</title>
+<style>
+  body{ font-family: sans-serif; background:#111; color:#eee; padding:20px; }
+  button{ padding:14px 20px; font-size:16px; margin:8px 0; width:100%; }
+  #log{ white-space:pre-wrap; background:#000; color:#0f0; padding:12px; border-radius:8px; font-size:13px; margin-top:16px; min-height:200px; }
+  audio{ width:100%; margin-top:12px; }
+</style>
+</head>
+<body>
+
+<h2>Vocal Stretch Isolation Test</h2>
+<p>This makes a short beep tone (no TTS needed), then tries to time-stretch it using the library — same technique the real app uses, just isolated so we can see exactly what happens.</p>
+
+<button onclick="runTest()">Run Test</button>
+
+<div id="log">Waiting to run...</div>
+<div id="playback"></div>
+
+<script>
+function log(msg){
+  document.getElementById('log').textContent += "\n" + msg;
+  console.log(msg);
+}
+
+// Makes a simple 1-second beep tone as a stand-in for a real vocal clip,
+// so this test doesn't depend on your TTS server at all — purely isolates
+// the stretch library itself.
+function makeTestTone(){
+  const sampleRate = 44100;
+  const duration = 1;
+  const buffer = new AudioContext().createBuffer(1, sampleRate * duration, sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i = 0; i < data.length; i++){
+    data[i] = Math.sin(2 * Math.PI * 440 * i / sampleRate) * 0.5;
+  }
+  return buffer;
+}
+
+async function runTest(){
+  document.getElementById('log').textContent = "Starting...";
+  try {
+    const { default: SignalsmithStretch } = await import('https://esm.sh/signalsmith-stretch@1');
+    log("✓ Library imported OK");
+
+    const testBuffer = makeTestTone();
+    log("✓ Test tone created: " + testBuffer.duration.toFixed(2) + "s, " + testBuffer.numberOfChannels + " channel(s)");
+
+    const targetSeconds = testBuffer.duration * 2; // stretch to double length
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // ---- ATTEMPT 1: setState/getState (per official docs) on a LIVE AudioContext ----
+    log("\n--- Attempt 1: setState/getState API, live AudioContext ---");
+    try {
+      const stretch1 = await SignalsmithStretch(audioCtx, { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+      const members1 = Object.getOwnPropertyNames(Object.getPrototypeOf(stretch1)).concat(Object.keys(stretch1));
+      log("Node members available: " + members1.join(", "));
+      log("Has setState? " + (typeof stretch1.setState === "function"));
+      log("Has addBuffers? " + (typeof stretch1.addBuffers === "function"));
+
+      if (typeof stretch1.setState === "function") {
+        await stretch1.setState({
+          sample: {
+            buffers: [testBuffer.getChannelData(0)],
+            sampleRate: testBuffer.sampleRate,
+            speed: 0.5,
+            position: 0,
+            endPosition: testBuffer.duration,
+            playing: 1
+          }
+        });
+        log("✓ setState() call completed without throwing");
+        const state = await stretch1.getState();
+        log("getState() returned: " + JSON.stringify(state));
+      }
+
+      // Record real-time output via MediaStreamDestination so we can hear
+      // exactly what this produces, on a live context (matches every real
+      // example/demo of this library — none of them use OfflineAudioContext).
+      const dest = audioCtx.createMediaStreamDestination();
+      stretch1.connect(dest);
+      const recorder = new MediaRecorder(dest.stream);
+      const chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+
+      const recordingDone = new Promise(resolve => {
+        recorder.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
+      });
+
+      recorder.start();
+      log("Recording live output for " + targetSeconds.toFixed(2) + "s...");
+      await new Promise(r => setTimeout(r, targetSeconds * 1000 + 300));
+      recorder.stop();
+      const blob = await recordingDone;
+      log("✓ Recorded blob size: " + blob.size + " bytes");
+
+      const url = URL.createObjectURL(blob);
+      const audioEl = document.createElement('audio');
+      audioEl.controls = true;
+      audioEl.src = url;
+      document.getElementById('playback').innerHTML = "<p><b>Attempt 1 result (setState, live context):</b></p>";
+      document.getElementById('playback').appendChild(audioEl);
+
+    } catch (e) {
+      log("✗ Attempt 1 failed: " + e.message);
+    }
+
+  } catch (e) {
+    log("✗ FATAL: " + e.message);
+  }
+}
+</script>
+
+</body>
+</html>
